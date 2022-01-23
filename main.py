@@ -5,6 +5,7 @@ import os
 import shutil
 import sys
 import hashlib
+from urllib.parse import quote
 
 import pysvn
 from PySide6.QtCore import Qt
@@ -29,6 +30,15 @@ class Setting(object):
         password = None
         workdir = None
 
+    class TableMap():
+        trunk = 0
+        trunk_status = 1
+        file_name = 2
+        target = 3
+        target_status = 4
+        sync_status = 5
+        log = 6
+
     def __init__(self):
         super(Setting, self).__init__()
         with open("setting\setting.json", "r", encoding="utf-8") as f:
@@ -49,19 +59,18 @@ class WindowModule(object):
             self.ui = None
             self.build_ui()  # 初始化UI
             self.set_style()
-            self.write_data()  # 从设置文件中写入控件内容
 
         def build_ui(self):
             ui = "%s/ui/main_window.ui" % __path__
             self.ui = QUiLoader().load(ui, parentWidget=None)
 
         def set_style(self):
-            self.ui.changeList.setColumnWidth(0, 150)
-            self.ui.changeList.setColumnWidth(1, 200)
-            self.ui.changeList.setColumnWidth(3, 200)
-
-        def write_data(self):
-            pass
+            tab_map = Setting.TableMap
+            self.ui.changeList.setColumnWidth(tab_map.file_name, 150)
+            self.ui.changeList.setColumnWidth(tab_map.trunk, 200)
+            self.ui.changeList.setColumnWidth(tab_map.target, 200)
+            self.ui.changeList.setColumnWidth(tab_map.sync_status, 150)
+            self.ui.changeList.setColumnWidth(tab_map.log, 400)
 
 
 class WindowController(object):
@@ -70,6 +79,9 @@ class WindowController(object):
             ctr = WindowController.Main
             ui = WindowData.main.ui
             ui.findChanges.clicked.connect(ctr.on_findChanges_clicked)
+            ui.syncBtn.clicked.connect(ctr.on_syncBtn_clicked)
+            ui.compareCheck.stateChanged.connect(
+                ctr.on_compareCheck_stateChanged)
             ui.commitBtn.clicked.connect(ctr.on_commitBtn_clicked)
 
         @staticmethod
@@ -86,8 +98,59 @@ class WindowController(object):
             ScriptManager.list_all_changes(changes)
 
         @staticmethod
+        def on_syncBtn_clicked():
+            ScriptManager.sync_changes()
+            changes = ScriptManager.find_changes()
+            ScriptManager.list_all_changes(changes)
+
+        @staticmethod
+        def on_compareCheck_stateChanged():
+            ui = WindowData.main.ui
+            ui.changeList.setRowCount(0)
+            changes = ScriptManager.find_changes()
+            ScriptManager.list_all_changes(changes)
+            
+        @staticmethod
         def on_commitBtn_clicked():
-            ScriptManager.commit_changes()
+            ui = WindowData.main.ui
+            tab_map = Setting.TableMap
+            tab_list: QTableWidget =ui.changeList
+            
+            changed_files = ""
+            
+            rows = tab_list.rowCount()
+            for row in range(0,rows):
+                file_name_item = tab_list.item(row,tab_map.file_name)
+                file_name = file_name_item.text()
+                trunk = tab_list.item(row,tab_map.trunk).text()
+                target = tab_list.item(row,tab_map.target).text()
+                if file_name_item.checkState() != Qt.Checked:
+                    continue
+                trunk_file = trunk+"\\"+file_name
+                target_file = target+"\\"+file_name
+                if " " in trunk_file:
+                    trunk_file = trunk
+                if " " in target_file:
+                    target_file = target
+                if changed_files != "":
+                    changed_files += "*"
+                changed_files += trunk_file
+                if changed_files != "":
+                    changed_files += "*"
+                changed_files += target_file
+                
+            t1 = SvnPro(trunk)
+            t2 = SvnPro(target)
+            t1.start()
+            t2.start()
+
+
+class WindowFunctions(object):
+
+    @staticmethod
+    def refresh_table():
+        changes = ScriptManager.find_changes()
+        ScriptManager.list_all_changes(changes)
 
 
 class ScriptManager():
@@ -98,7 +161,6 @@ class ScriptManager():
         changelist: QTableWidget = ui.changeList
 
         r = 0
-
         for file_name, file_props in changes.items():
             trunk = file_props["trunk"]
             trunk_status = file_props["trunk_status"]
@@ -106,11 +168,12 @@ class ScriptManager():
             target_status = file_props["target_status"]
             sync_status = file_props["sync_status"]
             log = file_props["log"]
+            # print(file_name, file_props)
 
             # get color
             trunk_brush = ScriptManager.get_change_color(trunk_status)
             target_brush = ScriptManager.get_change_color(target_status)
-            
+
             # changed file's name
             iname = QTableWidgetItem()
             iname.setText(file_name)
@@ -136,7 +199,7 @@ class ScriptManager():
             itarget_status = QTableWidgetItem()
             itarget_status.setText(target_status)
             itarget_status.setForeground(target_brush)
-            
+
             # sync status of changed item
             isync = QTableWidgetItem()
             isync.setText(sync_status)
@@ -148,73 +211,20 @@ class ScriptManager():
             itarget_log.setForeground(target_brush)
 
             # write changeList
+            tab_map = Setting.TableMap
             changelist.setRowCount(r+1)
-            changelist.setItem(r, 0, itrunk)
-            changelist.setItem(r, 1, istatus)
-            changelist.setItem(r, 2, iname)
-            changelist.setItem(r, 3, itarget)
-            changelist.setItem(r, 4, itarget_status)
-            changelist.setItem(r, 5, isync)
-            changelist.setItem(r, 6, itarget_log)
+            changelist.setItem(r, tab_map.trunk, itrunk)
+            changelist.setItem(r, tab_map.trunk_status, istatus)
+            changelist.setItem(r, tab_map.file_name, iname)
+            changelist.setItem(r, tab_map.target, itarget)
+            changelist.setItem(r, tab_map.target_status, itarget_status)
+            changelist.setItem(r, tab_map.sync_status, isync)
+            changelist.setItem(r, tab_map.log, itarget_log)
             r += 1
 
     @staticmethod
     def find_changes():
-        workdir: dict = Setting.Data.workdir
-        changes = {}
-        client = pysvn.Client()
-        for trunk, target in workdir.items():
-
-            trunk = trunk.replace("/", "\\")
-            target = target.replace("/", "\\")
-
-            all_item_status = client.status(trunk)
-
-            for file_status in all_item_status:
-                text_status = file_status.text_status
-                if text_status == pysvn.pysvn.wc_status_kind.normal:
-                    continue
-
-                # trunk file path
-                trunk_fp = file_status.path.replace("/", "\\")
-
-                # init file property
-                file_prop = {}
-                trans_text = ScriptManager.translate_change_type(text_status)
-                file_prop["status"] = trans_text
-
-                # get target file path
-                target_fp = trunk_fp.replace(trunk, target)
-                file_prop["target_path"] = target_fp
-
-                # get target file pathtype
-                if os.path.exists(target_fp):
-                    target_status = client.status(target_fp)[0].text_status
-                    file_prop["target_status"] = ScriptManager.translate_change_type(
-                        target_status)
-                else:
-                    file_prop["target_status"] = "不存在"
-                    file_prop["log"] = ""
-
-                # target log
-                if file_prop["target_status"] not in ["无版本控制", "已忽略", "未分类", "不存在"]:
-                    target_log = client.log(target_fp, limit=1)
-                    author = target_log[0]["author"]
-                    last_time = target_log[0]["date"]
-                    last_time = datetime.fromtimestamp(
-                        last_time).strftime("%Y-%m-%d %H:%M:%S")
-                    log_message = target_log[0]["message"]
-                    file_prop["log"] = f"{last_time}由{author}：{log_message}"
-                else:
-                    file_prop["log"] = ""
-
-                # make dict
-                changes[trunk_fp] = file_prop
-        return changes
-        # print(changes)
-
-    @staticmethod
-    def find_changes2():
+        ui = WindowData.main.ui
         workdir: dict = Setting.Data.workdir
         changes = {}
 
@@ -228,65 +238,115 @@ class ScriptManager():
             target_dir = target_dir.replace("/", "\\")
 
             trunk_status: list = client.status(trunk_dir)
-            # trunk_status.pop(0)
 
             for status in trunk_status:
+
                 # 工作文件
-                trunk_path: str = status.path
-                # 目标文件
-                target_path = trunk_path.replace(trunk_dir, target_dir)
+                file_path_trunk: str = status.path
+                file_status_trunk = status_parser(file_path_trunk)
+                file_path_target: str = file_path_trunk.replace(
+                    trunk_dir, target_dir)
+                file_status_target = status_parser(file_path_target)
+                file_name = file_path_trunk.replace(trunk_dir+"\\", "")
+                sync_status = "未同步"
+                log_content = ""
 
-                # 目录类
-                if os.path.isdir(trunk_path):
-                    # 目标路径是否存在
-                    if status_parser(target_path) == "正常":
+                # print(file_path_target)
+                # print(file_status_target)
+
+                if not ui.compareCheck.isChecked():
+                    if file_status_trunk == "正常":
                         continue
-                    # 名称
-                    file_name = trunk_path.replace(trunk_dir, "")
-                    if file_name == "":
-                        file_name = "工作路径"
 
-                    file_status = status_parser(trunk_path)
-                    target_status = status_parser(target_path)
-
-                # 文件类
-                else:
-                    # 目标文件存在
-                    if os.path.exists(target_path) and status_parser(trunk_path) == "正常":
-                        # 对比MD5
-                        file_md5 = md5(trunk_path)
-                        target_md5 = md5(target_path)
-                        if file_md5 == target_md5:
-                            # 一样的不用管
+                # brach中不存在的，无论trunk的status情况如何都要加入列表
+                # brach中存在的，对比两方信息，决定是否加入列表
+                if file_status_target != "不存在":
+                    # 目录类
+                    if os.path.isdir(file_path_trunk):
+                        # 如果目标版本管理状态是正常，就不用管了
+                        if file_status_trunk == "正常" and file_status_target == "正常":
                             continue
-                    file_name = trunk_path.replace(trunk_dir+"\\", "")
-                    file_status = status_parser(trunk_path)
-                    target_status = status_parser(target_path)
+                        # 名称（如果名称为空，说明其是工作路径本身）
+                        file_name = file_path_trunk.replace(trunk_dir+"\\", "")
+                        if file_name == "":
+                            file_name = "工作路径"
+                            
+                        sync_status = "已同步"
+                    # 文件类
+                    else:
+                        # 对比MD5
+                        file_md5 = md5(file_path_trunk)
+                        target_md5 = md5(file_path_target)
+                        # 如果MD5码一样
+                        if file_md5 == target_md5:
+                            # 如果文件已正常处于版本控制中，则不再做处理
+                            if file_status_trunk == "正常" and file_status_target == "正常":
+                                continue
+                            # 如果文件有任意一方发生改动
+                            sync_status = "已同步"
+                        else:
+                            if file_status_target == "正常" or file_status_target == "不存在":
+                                sync_status = "未同步"
+                            else:
+                                sync_status = "未同步，且目标本地有变动"
 
-                # target log
-                if target_status not in ["无版本控制", "已忽略", "未分类", "不存在"]:
-                    target_log = client.log(target_path, limit=1)
-                    author = target_log[0]["author"]
-                    last_time = target_log[0]["date"]
-                    last_time = datetime.fromtimestamp(
-                        last_time).strftime("%Y-%m-%d %H:%M:%S")
-                    log_message = target_log[0]["message"]
-                    log_content = f"{last_time}由{author}：{log_message}"
-                else:
-                    log_content = ""
+                        # target log
+                        # print(file_path_target,file_status_target)
+                        if file_status_target not in ["已增加","无版本控制", "已忽略", "未分类", "不存在"]:
+                            target_log = client.log(file_path_target, limit=1)
+                            author = target_log[0]["author"]
+                            last_time = target_log[0]["date"]
+                            last_time = datetime.fromtimestamp(
+                                last_time).strftime("%Y-%m-%d %H:%M:%S")
+                            log_message = target_log[0]["message"]
+                            log_content = f"{last_time}由{author}：{log_message}"
 
                 # Write data
                 file_prop = {}
-                # file_prop["file_name"] = file_name
                 file_prop["trunk"] = trunk_dir
-                file_prop["trunk_status"] = file_status
+                file_prop["trunk_status"] = file_status_trunk
                 file_prop["target"] = target_dir
-                file_prop["target_status"] = target_status
-                file_prop["sync_status"] = "未同步"
+                file_prop["target_status"] = file_status_target
+                file_prop["sync_status"] = sync_status
                 file_prop["log"] = log_content
+
                 changes[file_name] = file_prop
 
-        print(changes)
+                # 是没有加入版本控制的目录吗？
+                if file_status_trunk == "无版本控制" and os.path.isdir(file_path_trunk):
+                    # print(file_path_trunk)
+                    for root, dirs, files in os.walk(file_path_trunk):
+                        for dir in dirs:
+                            file_name = os.path.join(
+                                root, dir).replace(trunk_dir+"\\", "")
+                            file_prop = {}
+                            file_prop["trunk"] = trunk_dir
+                            file_prop["trunk_status"] = file_status_trunk
+                            file_prop["target"] = target_dir
+                            file_prop["target_status"] = status_parser(
+                                target_dir+"\\"+file_name)
+                            if os.path.exists(target_dir+file_name):
+                                sync_status = "已同步"
+                            file_prop["sync_status"] = sync_status
+                            file_prop["log"] = log_content
+
+                            changes[file_name] = file_prop
+                        for file in files:
+                            file_name = os.path.join(
+                                root, file).replace(trunk_dir+"\\", "")
+                            file_prop = {}
+                            file_prop["trunk"] = trunk_dir
+                            file_prop["trunk_status"] = file_status_trunk
+                            file_prop["target"] = target_dir
+                            file_prop["target_status"] = status_parser(
+                                target_dir+"\\"+file_name)
+                            if os.path.exists(target_dir+file_name):
+                                sync_status = "已同步"
+                            file_prop["sync_status"] = sync_status
+                            file_prop["log"] = log_content
+
+                            changes[file_name] = file_prop
+
         return changes
 
     @staticmethod
@@ -296,7 +356,12 @@ class ScriptManager():
 
         pywc = pysvn.wc_status_kind
         status_parser = pysvn.Client().status
-        status = status_parser(file_path)
+
+        try:
+            status = status_parser(file_path)
+        except:
+            return "无版本控制"
+
         text_status = status[0].text_status
 
         if text_status == pywc.modified:
@@ -335,26 +400,6 @@ class ScriptManager():
         return md5
 
     @staticmethod
-    def translate_change_type(change_type):
-        pywc = pysvn.wc_status_kind
-        if change_type == pywc.modified:
-            return "修改"
-        elif change_type == pywc.normal:
-            return "正常"
-        elif change_type == pywc.unversioned:
-            return "无版本控制"
-        elif change_type == pywc.missing:
-            return "缺少"
-        elif change_type == pywc.added:
-            return "已增加"
-        elif change_type == pywc.deleted:
-            return "删除"
-        elif change_type == pywc.ignored:
-            return "已忽略"
-        else:
-            return "未分类"
-
-    @staticmethod
     def get_change_color(change_type):
         if change_type == "修改":
             color = QColor(0, 50, 160)
@@ -368,51 +413,63 @@ class ScriptManager():
             color = QColor(100, 0, 0)
         elif change_type == "已忽略":
             color = QColor(0, 0, 0)
+        elif change_type == "不存在":
+            color = QColor(200, 200, 200)
         else:
             color = QColor(0, 0, 0)
         brush = QBrush(color)
         return brush
 
     @staticmethod
-    def commit_changes():
+    def sync_changes():
+        tab_map = Setting.TableMap
         ui = WindowData.main.ui
         tablist: QTableWidget = ui.changeList
 
         all_row = tablist.rowCount()
 
-        pending_files = ""
-        for row in range(0, all_row):
-            trunk_path = tablist.item(row, 0)
-            trunk_type = tablist.item(row, 1)
-            target_path = tablist.item(row, 2)
+        # changed_files = ""
 
-            if trunk_path.checkState() != Qt.Checked:
+        for row in range(0, all_row):
+            file_name = tablist.item(row, tab_map.file_name)
+            trunk_path = tablist.item(row, tab_map.trunk)
+            trunk_type = tablist.item(row, tab_map.trunk_status)
+            target_path = tablist.item(row, tab_map.target)
+            target_type = tablist.item(row, tab_map.target_status)
+
+            if file_name.checkState() != Qt.Checked:
                 continue
 
-            work_file = trunk_path.text()
-            pending_files += "*"+work_file
-
-            target_file = target_path.text()
-            pending_files += "*"+target_file
-
-            if trunk_type.text() in ["缺少", "删除"]:
-                if os.path.exists(target_file):
-                    if os.path.isfile(target_file):
-                        os.remove(target_file)
-                    elif os.path.isdir(target_file):
-                        os.rmdir(target_file)
-            elif trunk_type.text() in ["修改", "无版本控制", "已增加"]:
-                shutil.copy(work_file, target_file)
+            if "." in file_name.text():
+                act_file_name = file_name.text()
             else:
-                pass
+                act_file_name = file_name.text().lstrip("\\")
 
-        t = SvnPro(pending_files)
-        t.start()
+            file_path_trunk = trunk_path.text()+"\\"+act_file_name
+            # changed_files += "*"+file_path_trunk
 
-    @staticmethod
-    def call_svn_pro(work_path):
-        os.system(
-            f'"TortoiseProc" /command:commit /path:{work_path} /closeonend:3')
+            file_path_target = target_path.text()+"\\"+act_file_name
+            # changed_files += "*"+file_path_target
+
+            # it's dir
+            if os.path.isdir(file_path_trunk):
+                if target_type.text() in ["不存在", "缺少", "删除"]:
+                    os.makedirs(file_path_target)
+            else:
+                if trunk_type.text() in ["缺少", "删除"]:
+                    if os.path.exists(file_path_target):
+                        if os.path.isfile(file_path_target):
+                            os.remove(file_path_target)
+                        elif os.path.isdir(file_path_target):
+                            os.rmdir(file_path_target)
+                # elif trunk_type.text() in ["修改", "无版本控制", "已增加"]:
+                #     shutil.copy(file_path_trunk, file_path_target)
+                else:
+                    shutil.copy(file_path_trunk, file_path_target)
+
+        # return changed_files
+        # t = SvnPro(changed_files)
+        # t.start()
 
 
 class SvnPro(threading.Thread):
@@ -431,7 +488,7 @@ def create_window():
     WindowData.main = WindowModule.Main()
     WindowController.Main()
     WindowData.main.ui.show()
-    changes = ScriptManager.find_changes2()
+    changes = ScriptManager.find_changes()
     ScriptManager.list_all_changes(changes)
     sys.exit(app.exec())
 

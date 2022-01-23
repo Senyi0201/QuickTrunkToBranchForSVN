@@ -113,6 +113,9 @@
          <property name="text">
           <string>开启校验模式</string>
          </property>
+         <property name="checked">
+          <bool>true</bool>
+         </property>
         </widget>
        </item>
        <item>
@@ -162,7 +165,7 @@
           </size>
          </property>
          <property name="text">
-          <string>同步</string>
+          <string>同步到分支</string>
          </property>
         </widget>
        </item>
