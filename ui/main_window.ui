@@ -52,17 +52,17 @@
       </attribute>
       <column>
        <property name="text">
-        <string>文件名</string>
-       </property>
-      </column>
-      <column>
-       <property name="text">
         <string>工作路径</string>
        </property>
       </column>
       <column>
        <property name="text">
         <string>工作状态</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>文件名</string>
        </property>
       </column>
       <column>

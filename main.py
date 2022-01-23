@@ -56,8 +56,9 @@ class WindowModule(object):
             self.ui = QUiLoader().load(ui, parentWidget=None)
 
         def set_style(self):
-            self.ui.changeList.setColumnWidth(0, 200)
-            self.ui.changeList.setColumnWidth(2, 200)
+            self.ui.changeList.setColumnWidth(0, 150)
+            self.ui.changeList.setColumnWidth(1, 200)
+            self.ui.changeList.setColumnWidth(3, 200)
 
         def write_data(self):
             pass
@@ -98,49 +99,63 @@ class ScriptManager():
 
         r = 0
 
-        for c_path, c_props in changes.items():
-            c_st = c_props["status"]
-            c_target = c_props["target_path"]
-            c_target_st = c_props["target_status"]
-            c_target_log = c_props["log"]
+        for file_name, file_props in changes.items():
+            trunk = file_props["trunk"]
+            trunk_status = file_props["trunk_status"]
+            target = file_props["target"]
+            target_status = file_props["target_status"]
+            sync_status = file_props["sync_status"]
+            log = file_props["log"]
 
             # get color
-            c_brush = ScriptManager.get_change_color(c_st)
-            t_brush = ScriptManager.get_change_color(c_target_st)
+            trunk_brush = ScriptManager.get_change_color(trunk_status)
+            target_brush = ScriptManager.get_change_color(target_status)
+            
+            # changed file's name
+            iname = QTableWidgetItem()
+            iname.setText(file_name)
+            iname.setCheckState(Qt.Checked)
+            iname.setForeground(trunk_brush)
 
             # changed item's path
-            ichange = QTableWidgetItem()
-            ichange.setText(c_path)
-            ichange.setCheckState(Qt.Checked)
-            ichange.setForeground(c_brush)
+            itrunk = QTableWidgetItem()
+            itrunk.setText(trunk)
+            itrunk.setForeground(trunk_brush)
 
             # changed item's type
-            itype = QTableWidgetItem()
-            itype.setText(c_st)
-            itype.setForeground(c_brush)
+            istatus = QTableWidgetItem()
+            istatus.setText(trunk_status)
+            istatus.setForeground(trunk_brush)
 
             # changed item's target
             itarget = QTableWidgetItem()
-            itarget.setText(c_target)
-            itarget.setForeground(t_brush)
+            itarget.setText(target)
+            itarget.setForeground(target_brush)
 
             # target status of changed item
-            itarget_st = QTableWidgetItem()
-            itarget_st.setText(c_target_st)
-            itarget_st.setForeground(t_brush)
+            itarget_status = QTableWidgetItem()
+            itarget_status.setText(target_status)
+            itarget_status.setForeground(target_brush)
+            
+            # sync status of changed item
+            isync = QTableWidgetItem()
+            isync.setText(sync_status)
+            isync.setForeground(target_brush)
 
             # target logs
             itarget_log = QTableWidgetItem()
-            itarget_log.setText(c_target_log)
-            itarget_log.setForeground(t_brush)
+            itarget_log.setText(log)
+            itarget_log.setForeground(target_brush)
 
             # write changeList
             changelist.setRowCount(r+1)
-            changelist.setItem(r, 0, ichange)
-            changelist.setItem(r, 1, itype)
-            changelist.setItem(r, 2, itarget)
-            changelist.setItem(r, 3, itarget_st)
-            changelist.setItem(r, 4, itarget_log)
+            changelist.setItem(r, 0, itrunk)
+            changelist.setItem(r, 1, istatus)
+            changelist.setItem(r, 2, iname)
+            changelist.setItem(r, 3, itarget)
+            changelist.setItem(r, 4, itarget_status)
+            changelist.setItem(r, 5, isync)
+            changelist.setItem(r, 6, itarget_log)
             r += 1
 
     @staticmethod
@@ -202,9 +217,11 @@ class ScriptManager():
     def find_changes2():
         workdir: dict = Setting.Data.workdir
         changes = {}
+
         client = pysvn.Client()
+        status_parser = ScriptManager.status_parser
         md5 = ScriptManager.get_file_md5
-        # TODO 验证workdir是否存在于目录中
+
         for trunk_dir, target_dir in workdir.items():
 
             trunk_dir = trunk_dir.replace("/", "\\")
@@ -215,43 +232,89 @@ class ScriptManager():
 
             for status in trunk_status:
                 # 工作文件
-                file_path: str = status.path
-                text_status = status.text_status
-                
+                trunk_path: str = status.path
+                # 目标文件
+                target_path = trunk_path.replace(trunk_dir, target_dir)
+
                 # 目录类
-                if os.path.isdir(file_path):
-                    pass # TODO 目录类型处理
-                
+                if os.path.isdir(trunk_path):
+                    # 目标路径是否存在
+                    if status_parser(target_path) == "正常":
+                        continue
+                    # 名称
+                    file_name = trunk_path.replace(trunk_dir, "")
+                    if file_name == "":
+                        file_name = "工作路径"
+
+                    file_status = status_parser(trunk_path)
+                    target_status = status_parser(target_path)
+
                 # 文件类
                 else:
-                    # 获取目标文件
-                    target_file_path = file_path.replace(trunk_dir, target_dir)
                     # 目标文件存在
-                    if os.path.exists(target_file_path):
-                        print(target_file_path, ":", "存在")
+                    if os.path.exists(target_path) and status_parser(trunk_path) == "正常":
                         # 对比MD5
-                        file_md5 = md5(file_path)
-                        print(file_md5)
-                        target_file_md5 = md5(target_file_path)
-                        print(target_file_md5)
-                        if file_md5 == target_file_md5:
+                        file_md5 = md5(trunk_path)
+                        target_md5 = md5(target_path)
+                        if file_md5 == target_md5:
                             # 一样的不用管
-                            print("这俩一样")
                             continue
-                    # 不存在
-                    else:
-                        print(target_file_path, ":", "不存在")
-                        
-                file_prop = {}
-                file_prop["file_name"] = file_name
-                file_prop["trunk"] = trunk_dir
-                file_prop["trunk_status"] = file_status_trans
-                file_prop["target"] = target_dir
-                file_prop["target_status"] = tfile_status_trans
-                file_prop["sync_status"]
-                file_prop["log"]
+                    file_name = trunk_path.replace(trunk_dir+"\\", "")
+                    file_status = status_parser(trunk_path)
+                    target_status = status_parser(target_path)
 
-        pass
+                # target log
+                if target_status not in ["无版本控制", "已忽略", "未分类", "不存在"]:
+                    target_log = client.log(target_path, limit=1)
+                    author = target_log[0]["author"]
+                    last_time = target_log[0]["date"]
+                    last_time = datetime.fromtimestamp(
+                        last_time).strftime("%Y-%m-%d %H:%M:%S")
+                    log_message = target_log[0]["message"]
+                    log_content = f"{last_time}由{author}：{log_message}"
+                else:
+                    log_content = ""
+
+                # Write data
+                file_prop = {}
+                # file_prop["file_name"] = file_name
+                file_prop["trunk"] = trunk_dir
+                file_prop["trunk_status"] = file_status
+                file_prop["target"] = target_dir
+                file_prop["target_status"] = target_status
+                file_prop["sync_status"] = "未同步"
+                file_prop["log"] = log_content
+                changes[file_name] = file_prop
+
+        print(changes)
+        return changes
+
+    @staticmethod
+    def status_parser(file_path):
+        if not os.path.exists(file_path):
+            return "不存在"
+
+        pywc = pysvn.wc_status_kind
+        status_parser = pysvn.Client().status
+        status = status_parser(file_path)
+        text_status = status[0].text_status
+
+        if text_status == pywc.modified:
+            return "修改"
+        elif text_status == pywc.normal:
+            return "正常"
+        elif text_status == pywc.unversioned:
+            return "无版本控制"
+        elif text_status == pywc.missing:
+            return "缺少"
+        elif text_status == pywc.added:
+            return "已增加"
+        elif text_status == pywc.deleted:
+            return "删除"
+        elif text_status == pywc.ignored:
+            return "已忽略"
+        else:
+            return "未分类"
 
     @staticmethod
     def get_file_md5(file_path):
@@ -369,7 +432,7 @@ def create_window():
     WindowController.Main()
     WindowData.main.ui.show()
     changes = ScriptManager.find_changes2()
-    # ScriptManager.list_all_changes(changes)
+    ScriptManager.list_all_changes(changes)
     sys.exit(app.exec())
 
 
