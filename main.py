@@ -109,40 +109,17 @@ class WindowController(object):
             ui.changeList.setRowCount(0)
             changes = ScriptManager.find_changes()
             ScriptManager.list_all_changes(changes)
-            
+
         @staticmethod
         def on_commitBtn_clicked():
-            ui = WindowData.main.ui
-            tab_map = Setting.TableMap
-            tab_list: QTableWidget =ui.changeList
-            
-            changed_files = ""
-            
-            rows = tab_list.rowCount()
-            for row in range(0,rows):
-                file_name_item = tab_list.item(row,tab_map.file_name)
-                file_name = file_name_item.text()
-                trunk = tab_list.item(row,tab_map.trunk).text()
-                target = tab_list.item(row,tab_map.target).text()
-                if file_name_item.checkState() != Qt.Checked:
-                    continue
-                trunk_file = trunk+"\\"+file_name
-                target_file = target+"\\"+file_name
-                if " " in trunk_file:
-                    trunk_file = trunk
-                if " " in target_file:
-                    target_file = target
-                if changed_files != "":
-                    changed_files += "*"
-                changed_files += trunk_file
-                if changed_files != "":
-                    changed_files += "*"
-                changed_files += target_file
-                
-            t1 = SvnPro(trunk)
-            t2 = SvnPro(target)
-            t1.start()
-            t2.start()
+            workdir = Setting.Data.workdir
+            for trunk, target in workdir.items():
+                if " " in trunk:
+                    trunk = trunk.replace(" ", "%20")
+                t1 = SvnPro(trunk)
+                t2 = SvnPro(target)
+                t1.start()
+                t2.start()
 
 
 class WindowFunctions(object):
@@ -260,7 +237,10 @@ class ScriptManager():
 
                 # brach中不存在的，无论trunk的status情况如何都要加入列表
                 # brach中存在的，对比两方信息，决定是否加入列表
-                if file_status_target != "不存在":
+                if file_status_target == "不存在":
+                    if file_status_trunk == "不存在":
+                        sync_status == "已同步"
+                else:
                     # 目录类
                     if os.path.isdir(file_path_trunk):
                         # 如果目标版本管理状态是正常，就不用管了
@@ -270,7 +250,7 @@ class ScriptManager():
                         file_name = file_path_trunk.replace(trunk_dir+"\\", "")
                         if file_name == "":
                             file_name = "工作路径"
-                            
+
                         sync_status = "已同步"
                     # 文件类
                     else:
@@ -291,15 +271,15 @@ class ScriptManager():
                                 sync_status = "未同步，且目标本地有变动"
 
                         # target log
-                        # print(file_path_target,file_status_target)
-                        if file_status_target not in ["已增加","无版本控制", "已忽略", "未分类", "不存在"]:
-                            target_log = client.log(file_path_target, limit=1)
-                            author = target_log[0]["author"]
-                            last_time = target_log[0]["date"]
-                            last_time = datetime.fromtimestamp(
-                                last_time).strftime("%Y-%m-%d %H:%M:%S")
-                            log_message = target_log[0]["message"]
-                            log_content = f"{last_time}由{author}：{log_message}"
+                        # # print(file_path_target,file_status_target)
+                        # if file_status_target not in ["已增加", "无版本控制", "已忽略", "未分类", "不存在"]:
+                        #     target_log = client.log(file_path_target, limit=1)
+                        #     author = target_log[0]["author"]
+                        #     last_time = target_log[0]["date"]
+                        #     last_time = datetime.fromtimestamp(
+                        #         last_time).strftime("%Y-%m-%d %H:%M:%S")
+                        #     log_message = target_log[0]["message"]
+                        #     log_content = f"{last_time}由{author}：{log_message}"
 
                 # Write data
                 file_prop = {}
@@ -453,14 +433,24 @@ class ScriptManager():
 
             # it's dir
             if os.path.isdir(file_path_trunk):
+                if trunk_type.text() in ["不存在", "缺少", "删除"]:
+                    for root, dirs, files in os.walk(file_path_trunk):
+                        for file in files:
+                            file_name = os.path.join(root, file)
+                            os.remove(file_name)
+                    os.rmdir(file_path_target)
                 if target_type.text() in ["不存在", "缺少", "删除"]:
                     os.makedirs(file_path_target)
             else:
-                if trunk_type.text() in ["缺少", "删除"]:
+                if trunk_type.text() in ["不存在", "缺少", "删除"]:
                     if os.path.exists(file_path_target):
                         if os.path.isfile(file_path_target):
                             os.remove(file_path_target)
                         elif os.path.isdir(file_path_target):
+                            for root, dirs, files in os.walk(file_path_target):
+                                for file in files:
+                                    file_name = os.path.join(root, file)
+                                    os.remove(file_name)
                             os.rmdir(file_path_target)
                 # elif trunk_type.text() in ["修改", "无版本控制", "已增加"]:
                 #     shutil.copy(file_path_trunk, file_path_target)
@@ -480,6 +470,8 @@ class SvnPro(threading.Thread):
     def run(self):
         os.system(
             f'"TortoiseProc" /command:commit /path:{self.work_path} /closeonend:3')
+        changes = ScriptManager.find_changes()
+        ScriptManager.list_all_changes(changes)
 
 
 def create_window():
